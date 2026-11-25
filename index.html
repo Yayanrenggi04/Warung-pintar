@@ -473,6 +473,10 @@ dialog.modal[open] { animation: pop .24s var(--ease); }
 .modal-body p { color: var(--fg-2); font-size: 14.5px; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px 18px; position: sticky; bottom: 0; background: var(--surface); }
 .modal-cam { margin: 0; }
+.in-steps { display: grid; gap: 10px; margin: 0; padding-left: 20px; font-size: 14.5px; line-height: 1.55; color: var(--fg-2); }
+.in-steps li::marker { color: var(--brand); font-weight: 700; }
+.in-steps b { color: var(--fg); }
+@media (max-width: 900px) { .lp-actions .lp-install-nav { display: none; } }
 .sale-done { text-align: center; padding: 30px 24px 8px; display: grid; justify-items: center; gap: 6px; }
 .sale-done svg { width: 76px; height: 76px; }
 .sale-done circle { fill: none; stroke: var(--brand); stroke-width: 4; stroke-dasharray: 176; stroke-dashoffset: 176; animation: draw .55s .05s ease-out forwards; }
@@ -1088,6 +1092,7 @@ body.on-landing::before { content: ""; position: fixed; inset: 0 0 auto; height:
         <button class="lp-link" type="button" data-lp-scroll="lpTanya">Tanya jawab</button>
       </nav>
       <div class="lp-actions">
+        <button class="btn secondary lp-install-nav" type="button" data-install><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-phone"/></svg>Pasang aplikasi</button>
         <button class="btn ghost" type="button" data-lp-go="login">Masuk</button>
         <button class="btn" type="button" data-lp-go="register"><span>Daftar<span class="lp-long"> gratis</span></span></button>
       </div>
@@ -1106,6 +1111,7 @@ body.on-landing::before { content: ""; position: fixed; inset: 0 0 auto; height:
           <div class="lp-cta">
             <button class="btn lg" type="button" data-lp-go="register">Daftar gratis<svg class="ic" aria-hidden="true" focusable="false"><use href="#i-arrowright"/></svg></button>
             <button class="btn secondary lg" type="button" data-lp-go="login">Masuk</button>
+            <button class="btn ghost lg" type="button" data-install><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-phone"/></svg>Pasang aplikasi</button>
           </div>
           <ul class="lp-points">
             <li><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-check"/></svg>Tanpa biaya langganan</li>
@@ -1249,7 +1255,7 @@ body.on-landing::before { content: ""; position: fixed; inset: 0 0 auto; height:
                 <li><b>Android:</b> buka di Chrome, ketuk menu titik tiga, lalu pilih Pasang aplikasi.</li>
                 <li><b>iPhone:</b> buka di Safari, ketuk Bagikan, lalu pilih Tambah ke Layar Utama.</li>
               </ul>
-              <button class="btn light" type="button" id="lpInstall" hidden><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-phone"/></svg>Pasang sekarang</button>
+              <button class="btn light" type="button" id="lpInstall" data-install><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-phone"/></svg>Pasang sekarang</button>
             </div>
           </article>
           <article class="lp-safe lp-rv">
@@ -1864,6 +1870,11 @@ body.on-landing::before { content: ""; position: fixed; inset: 0 0 auto; height:
   </form>
 </dialog>
 
+<dialog class="modal" id="dlgInstall" aria-labelledby="inTitle">
+  <div class="modal-head"><h2 id="inTitle">Pasang Warung Pintar</h2></div>
+  <div class="modal-body"><p id="inLead"></p><ol class="in-steps" id="inSteps"></ol><p class="hint" id="inNote" hidden></p></div>
+  <div class="modal-foot"><button type="button" class="btn" id="inClose">Mengerti</button></div>
+</dialog>
 <dialog class="modal" id="dlgConfirm" aria-labelledby="cfTitle">
   <div class="modal-head"><h2 id="cfTitle">Konfirmasi</h2></div>
   <div class="modal-body"><p id="cfText"></p>
@@ -2577,7 +2588,7 @@ function renderSettings() {
   Cloud.paint();
   $('#btnDeleteAccount').hidden = Auth.mode !== 'supabase';
   $('#stVersion').textContent = 'Warung Pintar ' + VERSION;
-  $('#rowInstall').hidden = !deferredPrompt;
+  $('#rowInstall').hidden = appInstalled || isStandalone();
   if (!$('#gsMsg').textContent) $('#gsMsg').textContent = UP.gsUrl ? 'URL tersimpan. Ketuk Sinkron sekarang untuk mengirim data.' : 'Belum terhubung. Ikuti langkah pemasangan di bawah.';
 }
 
@@ -2899,14 +2910,33 @@ async function copyText(text, input) {
 
 /* ---------- install, network, service worker ---------- */
 let deferredPrompt = null;
-const showInstall = on => { ['#rowInstall', '#lpInstall'].forEach(s => { const el = $(s); if (el) el.hidden = !on; }); };
-addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; const r = $('#rowInstall'); if (r && page === 'pengaturan') r.hidden = false; const l = $('#lpInstall'); if (l) l.hidden = false; });
+let appInstalled = false;
+/* Tombol pasang tampil di mana saja, kecuali di aplikasi yang sudah terpasang. */
+const showInstall = on => { appInstalled = !on; $$('[data-install], #rowInstall').forEach(el => { el.hidden = !on; }); };
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredPrompt = e; });
 addEventListener('appinstalled', () => { deferredPrompt = null; showInstall(false); toast('Aplikasi terpasang di perangkat Anda'); });
+/* Satu ketukan jika browser mendukung. Jika tidak (iPhone, Firefox, dll.), tampilkan langkahnya. */
+function installSteps() {
+  const ua = navigator.userAgent || '';
+  const ios = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const safari = /safari/i.test(ua) && !/crios|fxios|edgios|opios|chrome|android/i.test(ua);
+  if (ios) return { lead: safari ? 'Di iPhone, pemasangan lewat Safari:' : 'Di iPhone, aplikasi hanya bisa dipasang dari Safari. Salin alamat situs ini, buka di Safari, lalu:', steps: ['Ketuk tombol <b>Bagikan</b> (kotak dengan panah ke atas) di bagian bawah layar.', 'Gulir, lalu pilih <b>Tambah ke Layar Utama</b>.', 'Ketuk <b>Tambah</b>. Warung Pintar muncul di layar utama dan terbuka seperti aplikasi.'] };
+  if (/android/i.test(ua)) return { lead: 'Di Android, pemasangan lewat Chrome:', steps: ['Ketuk <b>menu titik tiga</b> di pojok kanan atas.', 'Pilih <b>Pasang aplikasi</b> (atau <b>Tambahkan ke layar utama</b>).', 'Ketuk <b>Pasang</b>. Ikon Warung Pintar muncul di layar utama.'], note: /firefox/i.test(ua) ? 'Firefox di Android kurang mendukung. Pakai Chrome untuk hasil terbaik.' : '' };
+  return { lead: 'Di komputer, pemasangan lewat Chrome atau Edge:', steps: ['Cari ikon <b>Pasang</b> di ujung kanan kolom alamat, atau buka <b>menu titik tiga</b>.', 'Pilih <b>Pasang Warung Pintar</b>.', 'Aplikasi terbuka di jendela sendiri dan masuk ke daftar aplikasi komputer Anda.'], note: /firefox/i.test(ua) ? 'Firefox di komputer belum mendukung pemasangan. Pakai Chrome atau Edge.' : '' };
+}
 async function installApp() {
-  if (!deferredPrompt) return;
+  if (!deferredPrompt) {
+    const g = installSteps(), note = $('#inNote');
+    $('#inLead').textContent = g.lead;
+    $('#inSteps').innerHTML = g.steps.map(t => '<li>' + t + '</li>').join('');
+    const n = IN_FRAME ? 'Ini pratinjau di dalam halaman lain, jadi belum bisa dipasang. Buka situsnya di tab sendiri.' : (g.note || '');
+    note.textContent = n; note.hidden = !n;
+    openDlg($('#dlgInstall'));
+    return;
+  }
   deferredPrompt.prompt();
   try { await deferredPrompt.userChoice; } catch (e) { /* dismissed */ }
-  deferredPrompt = null; showInstall(false);
+  deferredPrompt = null;
 }
 function setNet() { const off = !navigator.onLine; $('#netPill').classList.toggle('on', off); $('#netPillTop').classList.toggle('on', off); }
 addEventListener('online', () => { setNet(); if (user) { toast('Kembali online'); queueSync(); } });
@@ -3329,7 +3359,7 @@ function presentLanding() {
   landing.dataset.mode = Auth.mode === 'supabase' ? 'sb' : 'local';
   landing.hidden = false; lpOn = true;
   document.body.classList.add('on-landing');
-  $('#lpInstall').hidden = !deferredPrompt;
+  $$('[data-install]').forEach(b => { b.hidden = appInstalled; });
   lpObserve();
   window.scrollTo(0, lpY);
   lpOnScroll();
@@ -3412,7 +3442,7 @@ function initLanding() {
     if (sc) { lpScrollTo(sc.dataset.lpScroll); return; }
     if (e.target.closest('[data-lp-top]')) window.scrollTo({ top: 0, behavior: reduced() ? 'auto' : 'smooth' });
   });
-  $('#lpInstall').onclick = installApp;
+  $$('[data-install]').forEach(b => { b.onclick = installApp; });
   $('#lnkHome').onclick = () => loginToLanding();
   /* Teks setuju di kartu daftar: buka beranda lalu gulir ke bagian yang dipilih. Di aplikasi terpasang tidak ada beranda, jadi tampil sebagai teks biasa. */
   $$('[data-legal]').forEach(b => { if (!landingAllowed()) b.replaceWith(document.createTextNode(b.textContent)); });
@@ -3833,6 +3863,7 @@ function wire() {
   $('#swIntro').onchange = e => { PREFS.intro = e.target.checked; savePrefs(); if (e.target.checked) toast('Animasi pembuka tampil saat Anda masuk berikutnya.'); };
   $('#swSound').onchange = e => { PREFS.sound = e.target.checked; savePrefs(); if (e.target.checked) beep(); };
   $('#btnInstall').onclick = installApp;
+  $('#inClose').onclick = () => $('#dlgInstall').close();
   $('#btnBackup').onclick = downloadBackup;
   $('#btnRestore').onclick = () => $('#fileRestore').click();
   $('#fileRestore').onchange = e => { const f = e.target.files && e.target.files[0]; e.target.value = ''; restoreFile(f); };
