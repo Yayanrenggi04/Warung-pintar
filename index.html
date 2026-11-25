@@ -550,6 +550,7 @@ dialog.modal[open] { animation: pop .24s var(--ease); }
 .auth .lead { color: var(--muted); font-size: 14px; margin: 4px 0 18px; }
 .auth form { display: grid; gap: 14px; }
 .form-error { display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 10px; background: var(--bad-soft); color: var(--bad-ink); font-size: 13.5px; font-weight: 500; }
+#lgResend { justify-self: start; text-align: left; font-weight: 600; font-size: 13.5px; }
 .form-ok { padding: 10px 12px; border-radius: 10px; background: var(--brand-soft); color: var(--brand-ink); font-size: 13.5px; font-weight: 500; }
 .auth .row-between { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .auth-foot { margin-top: 18px; text-align: center; font-size: 12.5px; color: var(--muted); }
@@ -1430,6 +1431,7 @@ body.on-landing::before { content: ""; position: fixed; inset: 0 0 auto; height:
         <div><h1>Selamat datang kembali</h1><p class="lead">Masuk untuk membuka warung Anda.</p></div>
         <div class="form-error" id="lgErr" role="alert" hidden></div>
         <div class="form-ok" id="lgOk" role="status" hidden></div>
+        <button class="link" id="lgResend" type="button" hidden>Kirim ulang email konfirmasi</button>
         <div class="field">
           <label for="lgEmail">Email</label>
           <div class="input-icon"><svg class="ic" aria-hidden="true" focusable="false"><use href="#i-mail"/></svg><input class="input" id="lgEmail" type="email" autocomplete="username" inputmode="email" placeholder="nama@email.com" autocapitalize="off" spellcheck="false"></div>
@@ -2047,7 +2049,7 @@ const SB = {
     return new AuthError('unknown', msg);
   },
   /* Where email links (confirm / reset password) send the person back to. Must be allowed in Supabase > Authentication > URL Configuration. */
-  redirect() { return (/^https?:$/.test(location.protocol) && !IN_FRAME) ? '?redirect_to=' + encodeURIComponent(location.origin + location.pathname) : ''; },
+  redirect() { return (/^https?:$/.test(location.protocol) && !IN_FRAME) ? '?redirect_to=' + encodeURIComponent(location.origin + location.pathname.replace(/index\.html$/, '')) : ''; },
   userFrom(u) {
     const m = (u && u.user_metadata) || {};
     return { id: u.id, email: u.email, shop: m.shop_name || '', owner: m.owner_name || '' };
@@ -2126,6 +2128,11 @@ const Auth = {
     const s = getSession();
     dropSession();
     if (s && s.mode === 'supabase' && SB.on) { try { await SB.req('/auth/v1/logout', { token: s.access }); } catch (e) { /* signing out locally is enough */ } }
+  },
+  /* Kirim ulang email konfirmasi (tautan lama sudah dipakai, kedaluwarsa, atau tidak sampai). */
+  async resend(email) {
+    if (!SB.on) throw new AuthError('unknown');
+    await SB.req('/auth/v1/resend' + SB.redirect(), { body: { type: 'signup', email } });
   },
   /* Password reset email (Supabase only; local accounts have no email). */
   async recover(email) {
@@ -3451,6 +3458,7 @@ function setAuthView(v, { focus = true } = {}) {
   $('#tabRegister').setAttribute('aria-selected', String(v === 'register'));
   $('#lnkHome').hidden = !(v === 'login' || v === 'register') || !landingAllowed();
   ['#lgErr', '#lgOk', '#rgErr', '#rgOk', '#fgErr', '#fgOk', '#npErr'].forEach(hideMsg);
+  $('#lgResend').hidden = true;
   if (focus) setTimeout(() => { const f = $('#' + FORM_IDS[v]).querySelector('input:not([type=checkbox])'); if (f) f.focus(); }, 60);
 }
 function authFail(sel, msg, focusSel) {
@@ -3479,6 +3487,15 @@ function wireAuth() {
     const next = authView === 'login' ? 'register' : 'login';
     setAuthView(next, { focus: false }); $(next === 'login' ? '#tabLogin' : '#tabRegister').focus();
   });
+  $('#lgResend').onclick = async () => {
+    const email = $('#lgEmail').value.trim(), btn = $('#lgResend');
+    hideMsg('#lgErr'); hideMsg('#lgOk');
+    if (!EMAIL_RE.test(email)) return authFail('#lgErr', 'Isi email Anda di kolom Email, lalu ketuk Kirim ulang.', '#lgEmail');
+    btn.disabled = true;
+    try { await Auth.resend(email); showOk('#lgOk', 'Email konfirmasi dikirim ulang ke ' + email + '. Cek juga folder Spam. Buka tautan terbaru saja.'); }
+    catch (err) { authFail('#lgErr', authMsg(err)); }
+    setTimeout(() => { btn.disabled = false; }, 45000);
+  };
   $('#lnkForgot').onclick = () => { const mail = $('#lgEmail').value.trim(); setAuthView('forgot'); if (mail) $('#fgEmail').value = mail; };
   $('#fgBack').onclick = () => setAuthView('login');
   $$('[data-toggle-pass]').forEach(b => b.onclick = () => {
@@ -3491,13 +3508,13 @@ function wireAuth() {
   $('#formLogin').addEventListener('submit', async e => {
     e.preventDefault();
     const email = $('#lgEmail').value.trim(), password = $('#lgPass').value;
-    hideMsg('#lgErr'); hideMsg('#lgOk');
+    hideMsg('#lgErr'); hideMsg('#lgOk'); $('#lgResend').hidden = true;
     if (!EMAIL_RE.test(email)) return authFail('#lgErr', 'Masukkan alamat email yang valid.', '#lgEmail');
     if (!password) return authFail('#lgErr', 'Masukkan kata sandi Anda.', '#lgPass');
     const btn = $('#lgSubmit'); busy(btn, true, 'Memeriksa…');
     let u;
     try { u = await Auth.login({ email, password, remember: $('#lgRemember').checked }); }
-    catch (err) { busy(btn, false); return authFail('#lgErr', authMsg(err), '#lgPass'); }
+    catch (err) { busy(btn, false); if (err && err.code === 'unconfirmed') $('#lgResend').hidden = false; return authFail('#lgErr', authMsg(err), '#lgPass'); }
     try { await enterApp(u, { how: 'login' }); }
     catch (err) { console.error(err); abortToLogin(); authFail('#lgErr', AUTH_MSG.unknown); }
     busy(btn, false);
@@ -3520,7 +3537,8 @@ function wireAuth() {
       ls.set('wp2:pending:' + email.toLowerCase(), { sample });
       setAuthView('login', { focus: false });
       $('#lgEmail').value = email;
-      showOk('#lgOk', 'Akun dibuat. Kami mengirim email konfirmasi ke ' + email + '. Buka tautannya, lalu masuk.');
+      showOk('#lgOk', 'Akun dibuat. Kami mengirim email konfirmasi ke ' + email + '. Buka tautannya, lalu masuk. Tidak ada? Cek folder Spam atau kirim ulang.');
+      $('#lgResend').hidden = false;
       return;
     }
     try { await enterApp(r.user, { how: 'register', sample }); }
@@ -3876,7 +3894,7 @@ async function boot() {
   if (!link && !want && !hasSavedSession() && landingAllowed()) { showLanding(); return; }
   gate.hidden = false; gateStage.style.visibility = 'hidden';     // closed shop while we check for a saved session
   if (link) clearHash();
-  if (link && link.error) { showLogin(); showMsg('#lgErr', AUTH_MSG.expired); return; }
+  if (link && link.error) { showLogin(); showMsg('#lgErr', AUTH_MSG.expired); $('#lgResend').hidden = false; return; }
   if (link && link.type === 'recovery') { recoverLink = link; showLogin('newpass'); return; }
   if (link) {                                                       // confirmation link: sign in straight away
     try { const u = await Auth.sessionFromLink(link); await enterApp(u, { how: 'login' }); return; }
