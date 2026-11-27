@@ -196,6 +196,24 @@ select.input { appearance: none; padding-right: 36px; background-image: url("dat
 .input-icon.has-btn > .input { padding-right: 44px; }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .check { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; color: var(--fg-2); cursor: pointer; }
+.print-row { padding: 10px 12px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--line); }
+.print-row > span { display: grid; gap: 2px; }
+.print-row b { color: var(--fg); font-weight: 600; }
+.tx-act { padding: 8px 0 2px; }
+#receipt { display: none; }
+@media print {
+  @page { size: 80mm auto; margin: 3mm; }
+  body.pr-on > *:not(#receipt) { display: none !important; }
+  html, body.pr-on { background: #fff !important; }
+  body.pr-on #receipt { display: block; width: 100%; color: #000; background: #fff; font: 12px/1.45 ui-monospace, "Courier New", monospace; }
+  #receipt hr { border: 0; border-top: 1px dashed #000; margin: 6px 0; }
+  #receipt .r-head { text-align: center; }
+  #receipt .r-head b { font-size: 15px; }
+  #receipt .r-line { display: flex; justify-content: space-between; gap: 8px; }
+  #receipt .r-sub { padding-left: 8px; }
+  #receipt .r-total { margin-top: 4px; font-size: 14px; font-weight: 700; }
+  #receipt .r-foot { margin-top: 8px; text-align: center; }
+}
 .check input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--brand); flex: none; }
 .switch { position: relative; display: inline-block; width: 44px; height: 26px; flex: none; }
 .switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; z-index: 1; }
@@ -1697,6 +1715,7 @@ body.on-landing::before { content: ""; position: fixed; inset: 0 0 auto; height:
               <div class="quick" id="quickCash"></div>
               <div class="sum-row soft"><span>Kembalian</span><b id="cChange">-</b></div>
               <div class="sum-row soft"><span>Estimasi laba</span><b id="cProfit">Rp 0</b></div>
+              <label class="check print-row" for="swPrint"><input type="checkbox" id="swPrint"><span><b>Cetak struk</b><span class="hint">Pilih untuk setiap transaksi. Pilihan terakhir diingat.</span></span></label>
               <button class="btn lg block" id="payBtn" type="button">Selesaikan penjualan</button>
             </div>
           </aside>
@@ -2462,6 +2481,7 @@ function renderCart() {
   $('#cChange').textContent = cash ? (cash >= c.total ? rp(cash - c.total) : 'Kurang ' + rp(c.total - cash)) : '-';
   $('#quickCash').innerHTML = quickAmounts(c.total).map((v, i) => '<button class="chip" type="button" data-cash="' + v + '">' + (i === 0 ? 'Uang pas' : rp(v)) + '</button>').join('');
   $('#payBtn').disabled = !c.lines.length;
+  $('#payBtn').textContent = $('#swPrint').checked ? 'Selesaikan dan cetak struk' : 'Selesaikan penjualan';
   renderBadges();
 }
 let lastCode = '', lastAt = 0;
@@ -2484,13 +2504,15 @@ function onCode(code) {
   addToCart(p.id);
 }
 function pay() {
+  const doPrint = $('#swPrint').checked;
   const c = cartCalc();
   if (!c.lines.length) return toast('Keranjang masih kosong');
   const cash = +$('#cCash').value || 0;
   if (cash && cash < c.total) return toast('Uang diterima kurang ' + rp(c.total - cash));
   for (const l of c.lines) if (l.q > l.p.s) return toast('Stok ' + l.p.n + ' tidak cukup');
   const items = c.lines.map(l => { l.p.s -= l.q; return { id: l.p.id, e: l.p.e, n: l.p.n, q: l.q, p: l.p.p, c: l.p.c }; });
-  SALES.push({ id: newSaleId(), t: Date.now(), items, total: c.total, disc: c.disc, cash });
+  const sale = { id: newSaleId(), t: Date.now(), items, total: c.total, disc: c.disc, cash };
+  SALES.push(sale);
   cart = {}; $('#cDisc').value = ''; $('#cCash').value = '';
   pane = 'items';
   commit();
@@ -2499,8 +2521,31 @@ function pay() {
   $('#saleSub').textContent = 'Laba kotor ' + rp(c.total - c.cost) + (cash ? ', kembalian ' + rp(cash - c.total) : '');
   const d = $('#dlgSale'); openDlg(d);
   clearTimeout(pay.t); pay.t = setTimeout(() => { if (d.open) d.close(); }, 2800);
+  if (doPrint) { clearTimeout(pay.t); setTimeout(() => { if (d.open) d.close(); printReceipt(sale); }, 500); }
   const low = items.map(i => P.find(p => p.id === i.id)).filter(p => p && p.s <= p.m);
   if (low.length) setTimeout(() => toast('Perlu restok: ' + low.map(p => p.n).join(', '), { ms: 4000 }), 3000);
+}
+
+/* ---------- Struk ---------- */
+function receiptHtml(s) {
+  const row = (a, b, cls) => '<div class="r-line' + (cls ? ' ' + cls : '') + '"><span>' + a + '</span><span>' + b + '</span></div>';
+  const sub = sum(s.items, i => i.p * i.q);
+  const lines = s.items.map(i => '<div class="r-line"><span>' + esc(i.n) + '</span></div>' + row(i.q + ' x ' + rp(i.p), rp(i.p * i.q), 'r-sub')).join('');
+  return '<div class="r-head"><b>' + esc(shopName()) + '</b><div>' + esc(fDate(s.t, { day: 'numeric', month: 'long', year: 'numeric' })) + ', ' + fTime(s.t) + '</div></div><hr>' + lines + '<hr>' +
+    row('Subtotal', rp(sub)) + (s.disc ? row('Diskon', '-' + rp(s.disc)) : '') + row('Total', rp(s.total), 'r-total') +
+    (s.cash ? row('Tunai', rp(s.cash)) + row('Kembalian', rp(Math.max(0, s.cash - s.total))) : '') +
+    '<hr><div class="r-foot">Terima kasih<br>sudah berbelanja</div>';
+}
+function printReceipt(s) {
+  if (IN_FRAME) { toast('Cetak struk tidak bisa dari pratinjau. Buka situsnya di tab sendiri.', { ms: 4200 }); return; }
+  const old = document.getElementById('receipt'); if (old) old.remove();
+  const el = document.createElement('div'); el.id = 'receipt'; el.innerHTML = receiptHtml(s); document.body.appendChild(el);
+  document.body.classList.add('pr-on');
+  let cleaned = false;
+  const done = () => { if (cleaned) return; cleaned = true; document.body.classList.remove('pr-on'); el.remove(); removeEventListener('afterprint', done); };
+  addEventListener('afterprint', done);
+  setTimeout(done, 90000);
+  try { window.print(); } catch (e) { done(); toast('Perangkat ini tidak bisa mencetak.'); }
 }
 
 /* ---------- Stok ---------- */
@@ -2567,7 +2612,7 @@ function renderHistory() {
       const sumTxt = s.items.slice(0, 3).map(i => i.e + ' ' + i.n + ' ×' + i.q).join(', ') + (s.items.length > 3 ? ' +' + (s.items.length - 3) + ' lainnya' : '');
       return '<details class="tx"><summary><span class="time">' + fTime(s.t) + '</span><span class="what"><b>' + esc(sumTxt) + (s.demo ? ' <span class="badge demo">Contoh</span>' : '') + '</b><span>' + nItems + ' barang' +
         (s.disc ? ', diskon ' + rp(s.disc) : '') + '</span></span><span class="amt">' + rp(s.total) + '<small>laba ' + rp(profit) + '</small></span></summary><div class="tx-lines">' +
-        s.items.map(i => '<div><span>' + esc(i.e) + ' ' + esc(i.n) + ' ×' + i.q + '</span><span>' + rp(i.p * i.q) + '</span></div>').join('') + '</div></details>';
+        s.items.map(i => '<div><span>' + esc(i.e) + ' ' + esc(i.n) + ' ×' + i.q + '</span><span>' + rp(i.p * i.q) + '</span></div>').join('') + '</div><div class="tx-act"><button class="btn secondary sm" type="button" data-print-sale="' + esc(String(s.id)) + '">Cetak struk</button></div></details>';
     }).join('');
     return '<section class="day"><div class="day-head"><span>' + esc(fDate(t, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })) + '</span><span>Bersih <b class="' + (net < 0 ? 'neg' : '') + '">' + rp(net) + '</b></span></div><div class="card">' + rows + '</div></section>';
   }).join('');
@@ -3838,6 +3883,13 @@ function wire() {
   $('#cCash').addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); pay(); } });
   $('#quickCash').addEventListener('click', e => { const c = e.target.closest('[data-cash]'); if (!c) return; $('#cCash').value = c.dataset.cash; renderCart(); });
   $('#payBtn').onclick = pay;
+  const sp = $('#swPrint'); sp.checked = !!ls.get('wp2:print');
+  sp.onchange = () => { ls.set('wp2:print', sp.checked ? 1 : 0); renderCart(); };
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-print-sale]'); if (!b) return;
+    e.preventDefault();
+    const sale = SALES.find(x => String(x.id) === b.dataset.printSale); if (sale) printReceipt(sale);
+  });
   $('#saleClose').onclick = () => $('#dlgSale').close();
   $('#manualCode').addEventListener('keydown', e => {
     if (e.key !== 'Enter') return;
